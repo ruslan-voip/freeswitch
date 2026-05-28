@@ -393,7 +393,9 @@ static switch_status_t http_put(url_cache_t *cache, http_profile_t *profile, swi
 			goto done;
 		}
 		switch_curl_easy_setopt(curl_handle, CURLOPT_UPLOAD, 1);
+#if !defined(LIBCURL_VERSION_NUM) || (LIBCURL_VERSION_NUM < 0x070c01)
 		switch_curl_easy_setopt(curl_handle, CURLOPT_PUT, 1);
+#endif
 		switch_curl_easy_setopt(curl_handle, CURLOPT_NOSIGNAL, 1);
 		switch_curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
 		switch_curl_easy_setopt(curl_handle, CURLOPT_URL, full_url);
@@ -1129,10 +1131,10 @@ static switch_status_t http_get(url_cache_t *cache, http_profile_t *profile, cac
 #else
 	if ((get_data.fd = open(get_data.url->filename, O_CREAT | O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR)) > -1) {
 #endif
-		switch_curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, 1);
-		switch_curl_easy_setopt(curl_handle, CURLOPT_MAXREDIRS, 10);
-		switch_curl_easy_setopt(curl_handle, CURLOPT_FAILONERROR, 1);
-		switch_curl_easy_setopt(curl_handle, CURLOPT_NOSIGNAL, 1);
+		switch_curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, (long)1);
+		switch_curl_easy_setopt(curl_handle, CURLOPT_MAXREDIRS, (long)10);
+		switch_curl_easy_setopt(curl_handle, CURLOPT_FAILONERROR, (long)1);
+		switch_curl_easy_setopt(curl_handle, CURLOPT_NOSIGNAL, (long)1);
 		if (headers) {
 			switch_curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
 		}
@@ -1167,6 +1169,7 @@ static switch_status_t http_get(url_cache_t *cache, http_profile_t *profile, cac
 		switch_curl_easy_cleanup(curl_handle);
 		close(get_data.fd);
 	} else {
+		switch_curl_easy_cleanup(curl_handle);
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "open() error: %s\n", strerror(errno));
 		status = SWITCH_STATUS_GENERR;
 		goto done;

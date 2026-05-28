@@ -172,7 +172,7 @@
  *		- APR (http://apr.apache.org)
  *		- APR-Util (http://apr.apache.org)
  *		- SQLite (http://www.sqlite.org)
- *		- Pcre (http://www.pcre.org/)
+ *		- Pcre2 (http://www.pcre.org/)
  *		- SRTP (http://srtp.sourceforge.net/srtp.html)
  *
  *	Additionally, the various external modules make use of several external modules:
@@ -187,9 +187,6 @@
  *
  *	mod_pocketsphinx
  *		- PocketSphinx (http://www.speech.cs.cmu.edu/pocketsphinx/)
- *
- *	mod_unimrcp
- *		- MRCP (http://www.unimrcp.org/)
  *
  *
  *  Codecs
@@ -225,11 +222,6 @@
  *  Endpoints
  *	mod_portaudio
  *		- portaudio (http://www.portaudio.com/)
- *
- *	mod_dingaling
- *		- libdingaling (internal library distributed with freeswitch which depends on)
- *		- APR (http://apr.apache.org)
- *		- iksemel (http://iksemel.jabberstudio.org/)
  *
  *	mod_sofia
  *		- sofia-sip (http://opensource.nokia.com/projects/sofia-sip/)

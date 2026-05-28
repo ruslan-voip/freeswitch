@@ -147,7 +147,7 @@ static void check_ip(void)
 	} else if (strcmp(hostname, runtime.hostname)) {
 		if (switch_event_create(&event, SWITCH_EVENT_TRAP) == SWITCH_STATUS_SUCCESS) {
 			switch_event_add_header(event, SWITCH_STACK_BOTTOM, "condition", "hostname-change");
-			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "old-hostname", hostname ? hostname : "nil");
+			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "old-hostname", hostname);
 			switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "new-hostname", runtime.hostname);
 			switch_event_fire(&event);
 		}
@@ -482,7 +482,7 @@ SWITCH_DECLARE(switch_bool_t) switch_core_set_var_conditional(const char *varnam
 		if (value) {
 			char *v = strdup(value);
 			switch_string_var_check(v, SWITCH_TRUE);
-			switch_event_add_header_string(runtime.global_vars, SWITCH_STACK_BOTTOM | SWITCH_STACK_NODUP, varname, v);
+			switch_event_add_header_string_nodup(runtime.global_vars, SWITCH_STACK_BOTTOM, varname, v);
 		} else {
 			switch_event_del_header(runtime.global_vars, varname);
 		}
@@ -1788,54 +1788,6 @@ SWITCH_DECLARE(switch_status_t) switch_core_thread_set_cpu_affinity(int cpu)
 }
 
 
-#ifdef ENABLE_ZRTP
-static void switch_core_set_serial(void)
-{
-	char buf[13] = "";
-	char path[256];
-
-	int fd = -1, write_fd = -1;
-	switch_ssize_t bytes = 0;
-
-	switch_snprintf(path, sizeof(path), "%s%sfreeswitch.serial", SWITCH_GLOBAL_dirs.conf_dir, SWITCH_PATH_SEPARATOR);
-
-
-	if ((fd = open(path, O_RDONLY, 0)) < 0) {
-		char *ip = switch_core_get_variable_dup("local_ip_v4");
-		uint32_t ipi = 0;
-		switch_byte_t *byte;
-		int i = 0;
-
-		if (ip) {
-			switch_inet_pton(AF_INET, ip, &ipi);
-			free(ip);
-			ip = NULL;
-		}
-
-
-		byte = (switch_byte_t *) & ipi;
-
-		for (i = 0; i < 8; i += 2) {
-			switch_snprintf(buf + i, sizeof(buf) - i, "%0.2x", *byte);
-			byte++;
-		}
-
-		switch_stun_random_string(buf + 8, 4, "0123456789abcdef");
-
-		if ((write_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR)) >= 0) {
-			bytes = write(write_fd, buf, sizeof(buf));
-			bytes++;
-			close(write_fd);
-		}
-	} else {
-		bytes = read(fd, buf, sizeof(buf) - 1);
-		close(fd);
-	}
-
-	switch_core_set_variable("switch_serial", buf);
-}
-#endif
-
 SWITCH_DECLARE(int) switch_core_test_flag(int flag)
 {
 	return switch_test_flag((&runtime), flag);
@@ -1908,7 +1860,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 	}
 
 	/* INIT APR and Create the pool context */
-	if (apr_initialize() != SWITCH_STATUS_SUCCESS) {
+	if (fspr_initialize() != SWITCH_STATUS_SUCCESS) {
 		*err = "FATAL ERROR! Could not initialize APR\n";
 		return SWITCH_STATUS_MEMERR;
 	}
@@ -1952,6 +1904,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 	load_mime_types();
 	runtime.flags |= flags;
 	runtime.sps_total = 30;
+	runtime.uuid_version = 4;
 
 	*err = NULL;
 
@@ -1993,9 +1946,6 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 	switch_core_set_variable("cache_dir", SWITCH_GLOBAL_dirs.cache_dir);
 	switch_core_set_variable("data_dir", SWITCH_GLOBAL_dirs.data_dir);
 	switch_core_set_variable("localstate_dir", SWITCH_GLOBAL_dirs.localstate_dir);
-#ifdef ENABLE_ZRTP
-	switch_core_set_serial();
-#endif
 	switch_console_init(runtime.memory_pool);
 	switch_event_init(runtime.memory_pool);
 	switch_channel_global_init(runtime.memory_pool);
@@ -2003,7 +1953,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 	if (switch_xml_init(runtime.memory_pool, err) != SWITCH_STATUS_SUCCESS) {
 		/* allow missing configuration if MINIMAL */
 		if (!(flags & SCF_MINIMAL)) {
-			apr_terminate();
+			fspr_terminate();
 			return SWITCH_STATUS_MEMERR;
 		}
 	}
@@ -2172,6 +2122,10 @@ static void switch_load_core_config(const char *file)
 					} else {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "max-db-handles must be between 5 and 5000\n");
 					}
+				} else if (!strcasecmp(var, "odbc-skip-autocommit-flip")) {
+					if (switch_true(val)) {
+						switch_odbc_skip_autocommit_flip();
+					}
 				} else if (!strcasecmp(var, "db-handle-timeout")) {
 					long tmp = atol(val);
 
@@ -2259,6 +2213,8 @@ static void switch_load_core_config(const char *file)
 					switch_time_set_use_system_time(switch_true(val));
 				} else if (!strcasecmp(var, "enable-monotonic-timing")) {
 					switch_time_set_monotonic(switch_true(val));
+				} else if (!strcasecmp(var, "uuid-version") && !zstr(val)) {
+					runtime.uuid_version = atoi(val);
 				} else if (!strcasecmp(var, "enable-softtimer-timerfd")) {
 					int ival = 0;
 					if (val) {
@@ -2377,10 +2333,6 @@ static void switch_load_core_config(const char *file)
 					} else {
 						runtime.odbc_dbtype = DBTYPE_DEFAULT;
 					}
-#ifdef ENABLE_ZRTP
-				} else if (!strcasecmp(var, "rtp-enable-zrtp")) {
-					switch_core_set_variable("zrtp_enabled", val);
-#endif
 				} else if (!strcasecmp(var, "switchname") && !zstr(val)) {
 					runtime.switchname = switch_core_strdup(runtime.memory_pool, val);
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Set switchname to %s\n", runtime.switchname);
@@ -3011,10 +2963,17 @@ SWITCH_DECLARE(int32_t) switch_core_session_ctl(switch_session_ctl_t cmd, void *
 		if (oldintval > 0) {
 			runtime.sps_total = oldintval;
 		}
+
 		newintval = runtime.sps_total;
 		switch_mutex_unlock(runtime.throttle_mutex);
 		break;
+	case SCSC_UUID_VERSION:
+		if(oldintval > 0){
+			runtime.uuid_version = oldintval;
+		}
 
+		newintval = runtime.uuid_version;
+		break;
 	case SCSC_RECLAIM:
 		switch_core_memory_reclaim_all();
 		newintval = 0;
@@ -3060,7 +3019,7 @@ SWITCH_DECLARE(switch_bool_t) switch_core_ready_outbound(void)
 	return (switch_test_flag((&runtime), SCF_SHUTTING_DOWN) || switch_test_flag((&runtime), SCF_NO_NEW_OUTBOUND_SESSIONS)) ? SWITCH_FALSE : SWITCH_TRUE;
 }
 
-void switch_core_sqldb_destroy()
+void switch_core_sqldb_destroy(void)
 {
 	if (switch_test_flag((&runtime), SCF_USE_SQL)) {
 		switch_core_sqldb_stop();
@@ -3156,8 +3115,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_destroy(void)
 	switch_core_media_deinit();
 
 	if (runtime.memory_pool) {
-		apr_pool_destroy(runtime.memory_pool);
-		apr_terminate();
+		fspr_pool_destroy(runtime.memory_pool);
+		fspr_terminate();
 	}
 
 	sqlite3_shutdown();
@@ -3617,7 +3576,7 @@ SWITCH_DECLARE(int) switch_stream_system(const char *cmd, switch_stream_handle_t
 	}
 }
 
-SWITCH_DECLARE(uint16_t) switch_core_get_rtp_port_range_start_port()
+SWITCH_DECLARE(uint16_t) switch_core_get_rtp_port_range_start_port(void)
 {
 	uint16_t start_port = 0;
 
@@ -3628,7 +3587,7 @@ SWITCH_DECLARE(uint16_t) switch_core_get_rtp_port_range_start_port()
 	return start_port;
 }
 
-SWITCH_DECLARE(uint16_t) switch_core_get_rtp_port_range_end_port()
+SWITCH_DECLARE(uint16_t) switch_core_get_rtp_port_range_end_port(void)
 {
 	uint16_t end_port = 0;
 

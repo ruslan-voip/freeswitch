@@ -33,7 +33,8 @@
 
 #include <switch.h>
 #include <switch_channel.h>
-#include <pcre.h>
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
 
 struct switch_cause_table {
 	const char *name;
@@ -135,6 +136,7 @@ static struct switch_cause_table CAUSE_CHART[] = {
 	{"UNSUPPORTED_CERTIFICATE", SWITCH_CAUSE_UNSUPPORTED_CERTIFICATE},
 	{"INVALID_IDENTITY", SWITCH_CAUSE_INVALID_IDENTITY},
 	{"STALE_DATE", SWITCH_CAUSE_STALE_DATE},
+	{"REJECT_ALL", SWITCH_CAUSE_REJECT_ALL},
 	{NULL, 0}
 };
 
@@ -1019,6 +1021,24 @@ SWITCH_DECLARE(const char *) switch_channel_get_variable_dup(switch_channel_t *c
 	switch_mutex_unlock(channel->profile_mutex);
 
 	return r;
+}
+
+SWITCH_DECLARE(const char *) switch_channel_get_variable_strdup(switch_channel_t *channel, const char *varname)
+{
+	const char *value = switch_channel_get_variable_dup(channel, varname, SWITCH_FALSE, -1);
+
+	return value ? (const char *)strdup(value) : NULL;
+}
+
+SWITCH_DECLARE(switch_status_t) switch_channel_get_variable_buf(switch_channel_t *channel, const char *varname, char *buf, switch_size_t buflen)
+{
+	const char *value = switch_channel_get_variable_dup(channel, varname, SWITCH_FALSE, -1);
+
+	if (value && buf && buflen && switch_copy_string(buf, value, buflen)) {
+		return SWITCH_STATUS_SUCCESS;
+	}
+
+	return SWITCH_STATUS_FALSE;
 }
 
 SWITCH_DECLARE(const char *) switch_channel_get_variable_partner(switch_channel_t *channel, const char *varname)
@@ -3053,12 +3073,12 @@ SWITCH_DECLARE(const switch_state_handler_table_t *) switch_channel_get_state_ha
 
 	switch_assert(channel != NULL);
 
-	if (index >= SWITCH_MAX_STATE_HANDLERS || index > channel->state_handler_index) {
-		return NULL;
+	switch_mutex_lock(channel->state_mutex);
+
+	if (index < SWITCH_MAX_STATE_HANDLERS && index <= channel->state_handler_index) {
+		h = channel->state_handlers[index];
 	}
 
-	switch_mutex_lock(channel->state_mutex);
-	h = channel->state_handlers[index];
 	switch_mutex_unlock(channel->state_mutex);
 
 	return h;
@@ -3066,12 +3086,13 @@ SWITCH_DECLARE(const switch_state_handler_table_t *) switch_channel_get_state_ha
 
 SWITCH_DECLARE(void) switch_channel_clear_state_handler(switch_channel_t *channel, const switch_state_handler_table_t *state_handler)
 {
-	int index, i = channel->state_handler_index;
+	int index, i;
 	const switch_state_handler_table_t *new_handlers[SWITCH_MAX_STATE_HANDLERS] = { 0 };
 
 	switch_assert(channel != NULL);
 
 	switch_mutex_lock(channel->state_mutex);
+	i = channel->state_handler_index;
 	channel->state_handler_index = 0;
 
 	if (state_handler) {
@@ -3501,61 +3522,6 @@ SWITCH_DECLARE(switch_status_t) switch_channel_perform_mark_ring_ready_value(swi
 	return SWITCH_STATUS_FALSE;
 }
 
-SWITCH_DECLARE(void) switch_channel_check_zrtp(switch_channel_t *channel)
-{
-
-	if (!switch_channel_test_flag(channel, CF_ZRTP_PASSTHRU)
-		&& switch_channel_test_flag(channel, CF_ZRTP_PASSTHRU_REQ)
-		&& switch_channel_test_flag(channel, CF_ZRTP_HASH)) {
-		switch_core_session_t *other_session;
-		switch_channel_t *other_channel;
-		int doit = 1;
-
-		if (switch_core_session_get_partner(channel->session, &other_session) == SWITCH_STATUS_SUCCESS) {
-			other_channel = switch_core_session_get_channel(other_session);
-
-			if (switch_channel_test_flag(other_channel, CF_ZRTP_HASH) && !switch_channel_test_flag(other_channel, CF_ZRTP_PASSTHRU)) {
-
-				switch_channel_set_flag(channel, CF_ZRTP_PASSTHRU);
-				switch_channel_set_flag(other_channel, CF_ZRTP_PASSTHRU);
-
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(channel->session), SWITCH_LOG_INFO,
-								  "%s Activating ZRTP passthru mode.\n", switch_channel_get_name(channel));
-
-				switch_channel_set_variable(channel, "zrtp_passthru_active", "true");
-				switch_channel_set_variable(other_channel, "zrtp_passthru_active", "true");
-				switch_channel_set_variable(channel, "zrtp_secure_media", "false");
-				switch_channel_set_variable(other_channel, "zrtp_secure_media", "false");
-				doit = 0;
-			}
-
-			switch_core_session_rwunlock(other_session);
-		}
-
-		if (doit) {
-			switch_channel_set_variable(channel, "zrtp_passthru_active", "false");
-			switch_channel_set_variable(channel, "zrtp_secure_media", "true");
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(channel->session), SWITCH_LOG_INFO,
-							  "%s ZRTP not negotiated on both sides; disabling ZRTP passthru mode.\n", switch_channel_get_name(channel));
-
-			switch_channel_clear_flag(channel, CF_ZRTP_PASSTHRU);
-			switch_channel_clear_flag(channel, CF_ZRTP_HASH);
-
-			if (switch_core_session_get_partner(channel->session, &other_session) == SWITCH_STATUS_SUCCESS) {
-				other_channel = switch_core_session_get_channel(other_session);
-
-				switch_channel_set_variable(other_channel, "zrtp_passthru_active", "false");
-				switch_channel_set_variable(other_channel, "zrtp_secure_media", "true");
-				switch_channel_clear_flag(other_channel, CF_ZRTP_PASSTHRU);
-				switch_channel_clear_flag(other_channel, CF_ZRTP_HASH);
-
-				switch_core_session_rwunlock(other_session);
-			}
-
-		}
-	}
-}
-
 SWITCH_DECLARE(switch_status_t) switch_channel_perform_mark_pre_answered(switch_channel_t *channel, const char *file, const char *func, int line)
 {
 	switch_event_t *event;
@@ -3566,7 +3532,6 @@ SWITCH_DECLARE(switch_status_t) switch_channel_perform_mark_pre_answered(switch_
 
 		switch_core_media_check_dtls(channel->session, SWITCH_MEDIA_TYPE_AUDIO);
 
-		switch_channel_check_zrtp(channel);
 		switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, func, line, switch_channel_get_uuid(channel), SWITCH_LOG_NOTICE, "Pre-Answer %s!\n", channel->name);
 		switch_channel_set_flag(channel, CF_EARLY_MEDIA);
 
@@ -3872,7 +3837,6 @@ SWITCH_DECLARE(switch_status_t) switch_channel_perform_mark_answered(switch_chan
 		switch_mutex_unlock(channel->profile_mutex);
 	}
 
-	switch_channel_check_zrtp(channel);
 	switch_channel_set_flag(channel, CF_ANSWERED);
 
 	if (switch_true(switch_channel_get_variable(channel, "video_mirror_input"))) {
@@ -4586,21 +4550,22 @@ SWITCH_DECLARE(switch_status_t) switch_channel_set_timestamps(switch_channel_t *
 		char *digit_string = dtstr;
 		char *X = NULL;
 		switch_regex_t *re = NULL;
+		switch_regex_match_t *match_data = NULL;
 		char *substituted = NULL;
 
 		if (!zstr(var)) {
 			int proceed = 0;
-			int ovector[30];
 
-			if ((proceed = switch_regex_perform(dtstr, var, &re, ovector, sizeof(ovector) / sizeof(ovector[0])))) {
+			if ((proceed = switch_regex_perform(dtstr, var, &re, &match_data))) {
 				int len = (strlen(dtstr) + strlen(var) + 10) * proceed;
 				int i = 0;
 				const char *replace = NULL;
+				PCRE2_SIZE replace_size;
 
 				X = malloc(len);
 
 				for (i = 0; i < proceed; i++) {
-					if (pcre_get_substring(dtstr, ovector, proceed, i, &replace) >= 0) {
+					if (pcre2_substring_get_bynumber(match_data, i, (PCRE2_UCHAR **)&replace, &replace_size) >= 0) {
 						if (replace) {
 							switch_size_t plen = strlen(replace);
 							memset(X, 'X', plen);
@@ -4609,7 +4574,7 @@ SWITCH_DECLARE(switch_status_t) switch_channel_set_timestamps(switch_channel_t *
 							switch_safe_free(substituted);
 							substituted = switch_string_replace(substituted ? substituted : dtstr, replace, X);
 							
-							pcre_free_substring(replace);
+							pcre2_substring_free((PCRE2_UCHAR *)replace);
 						}
 					}
 				}
@@ -4621,6 +4586,7 @@ SWITCH_DECLARE(switch_status_t) switch_channel_set_timestamps(switch_channel_t *
 		}
 
 		switch_channel_set_variable(channel, "digits_dialed", digit_string);
+		switch_regex_match_safe_free(match_data);
 		switch_regex_safe_free(re);
 		switch_safe_free(substituted);
 		switch_safe_free(X);

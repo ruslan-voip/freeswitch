@@ -48,7 +48,7 @@ static void test_wait_for_uuid(char *uuid)
 		SWITCH_STANDARD_STREAM(stream);
 		switch_api_execute("show", "channels", NULL, &stream);
 
-		if (!strncmp((char *)stream.data, "uuid,", 5)) {
+		if (stream.data && !strncmp((char *)stream.data, "uuid,", 5)) {
 			channel_data = switch_mprintf("%s", (char *)stream.data);
 			switch_safe_free(stream.data);
 			break;
@@ -76,7 +76,9 @@ static const char *test_wait_for_chan_var(switch_channel_t *channel, const char 
 	int loop_count = 50;
 	const char *var=NULL;
 	do {
-		if (!strcmp(switch_channel_get_variable(channel, "sip_cseq"),seq)){
+		const char *sip_cseq = switch_channel_get_variable(channel, "sip_cseq");
+
+		if (sip_cseq && seq && !strcmp(sip_cseq, seq)){
 			switch_sleep(100 * 1000);
 			var = switch_channel_get_variable(channel, "rtp_local_sdp_str");
 			break;
@@ -88,7 +90,7 @@ static const char *test_wait_for_chan_var(switch_channel_t *channel, const char 
 	return var;
 }
 
-static switch_bool_t has_ipv6() 
+static switch_bool_t has_ipv6(void)
 {
 	switch_stream_handle_t stream = { 0 };
 	SWITCH_STANDARD_STREAM(stream);
@@ -108,7 +110,7 @@ static switch_bool_t has_ipv6()
 	return SWITCH_TRUE;
 }
 
-static void register_gw()
+static void register_gw(void)
 {
 	switch_stream_handle_t stream = { 0 };
 	SWITCH_STANDARD_STREAM(stream);
@@ -116,7 +118,7 @@ static void register_gw()
 	switch_safe_free(stream.data);
 }
 
-static void unregister_gw()
+static void unregister_gw(void)
 {
 	switch_stream_handle_t stream = { 0 };
 	SWITCH_STANDARD_STREAM(stream);
